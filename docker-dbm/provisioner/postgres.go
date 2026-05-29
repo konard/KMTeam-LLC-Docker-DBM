@@ -127,6 +127,8 @@ func (p *PostgresProvisioner) Provision(config Config) error {
 	_, err = db.Exec(revokeQuery)
 	if err != nil {
 		log.Printf("[PostgreSQL] WARNING: Failed to revoke public access: %v", err)
+		// Cleanup: drop the database and user to avoid leaving orphaned resources
+		rollbackPostgres(db, config.AppDBName, config.AppDBUser)
 		// This is a security-critical operation, so we treat it as an error
 		return fmt.Errorf("failed to revoke public access: %w", err)
 	}
@@ -140,6 +142,8 @@ func (p *PostgresProvisioner) Provision(config Config) error {
 	)
 	_, err = db.Exec(grantQuery)
 	if err != nil {
+		// Cleanup: drop the database and user to avoid leaving orphaned resources
+		rollbackPostgres(db, config.AppDBName, config.AppDBUser)
 		return fmt.Errorf("failed to grant privileges: %w", err)
 	}
 	log.Printf("[PostgreSQL] Granted all privileges on '%s' to '%s'", config.AppDBName, config.AppDBUser)
@@ -149,6 +153,24 @@ func (p *PostgresProvisioner) Provision(config Config) error {
 		config.AppDBName, config.AppDBUser, config.DBHost, config.DBPort)
 
 	return nil
+}
+
+// rollbackPostgres drops the newly created database and user to avoid leaving
+// orphaned resources when provisioning fails after both have been created.
+// Identifiers are safely escaped using quoteIdentifier(). Cleanup errors are
+// logged but not returned, since the original provisioning error takes priority.
+func rollbackPostgres(db *sql.DB, dbName, dbUser string) {
+	log.Printf("[PostgreSQL] Rolling back: dropping database '%s' and user '%s'...", dbName, dbUser)
+
+	dropDBQuery := fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdentifier(dbName))
+	if _, err := db.Exec(dropDBQuery); err != nil {
+		log.Printf("[PostgreSQL] WARNING: Failed to drop database '%s' during rollback: %v", dbName, err)
+	}
+
+	dropUserQuery := fmt.Sprintf("DROP USER IF EXISTS %s", quoteIdentifier(dbUser))
+	if _, err := db.Exec(dropUserQuery); err != nil {
+		log.Printf("[PostgreSQL] WARNING: Failed to drop user '%s' during rollback: %v", dbUser, err)
+	}
 }
 
 // quoteIdentifier properly quotes a PostgreSQL identifier to prevent SQL injection.
