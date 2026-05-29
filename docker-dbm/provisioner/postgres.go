@@ -1,13 +1,23 @@
 package provisioner
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"regexp"
+	"time"
 
 	_ "github.com/lib/pq"
 )
+
+// pingTimeout is the maximum duration to wait for the database connectivity
+// check (PingContext) to succeed. A strict timeout prevents db.Ping from
+// hanging indefinitely when the network is misconfigured or a firewall
+// silently drops packets, which would otherwise stall the retry loop.
+// It is a variable (rather than a constant) so tests can shorten it.
+var pingTimeout = 5 * time.Second
 
 // Pre-compiled regex patterns for efficiency
 var (
@@ -33,13 +43,25 @@ func (p *PostgresProvisioner) Name() string {
 func (p *PostgresProvisioner) Provision(config Config) error {
 	log.Printf("[PostgreSQL] Connecting to server at %s:%s...", config.DBHost, config.DBPort)
 
-	// Connect to the postgres system database
+	// Connect to the postgres system database.
+	//
+	// connect_timeout bounds the entire connection-establishment phase at the
+	// driver level. This is essential because lib/pq only honors a context
+	// during the TCP dial, not during the startup handshake; without it, a
+	// server that accepts the TCP connection but stalls the handshake (e.g. a
+	// firewall silently dropping packets) would hang despite PingContext.
+	// lib/pq accepts whole seconds only, so we round the ping timeout up.
+	connectTimeoutSecs := int(math.Ceil(pingTimeout.Seconds()))
+	if connectTimeoutSecs < 1 {
+		connectTimeoutSecs = 1
+	}
 	connStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable",
+		"host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable connect_timeout=%d",
 		config.DBHost,
 		config.DBPort,
 		config.AdminUser,
 		config.AdminPass,
+		connectTimeoutSecs,
 	)
 
 	db, err := sql.Open("postgres", connStr)
@@ -48,8 +70,11 @@ func (p *PostgresProvisioner) Provision(config Config) error {
 	}
 	defer db.Close()
 
-	// Test the connection
-	if err := db.Ping(); err != nil {
+	// Test the connection with a strict timeout so a misconfigured network
+	// or a silently dropped connection cannot hang the deployment pipeline.
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("failed to ping PostgreSQL server: %w", err)
 	}
 	log.Println("[PostgreSQL] Connected successfully")

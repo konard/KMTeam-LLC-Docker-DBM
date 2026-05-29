@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -27,13 +28,20 @@ func (m *MariaDBProvisioner) Name() string {
 func (m *MariaDBProvisioner) Provision(config Config) error {
 	log.Printf("[MariaDB] Connecting to server at %s:%s...", config.DBHost, config.DBPort)
 
-	// Build DSN (Data Source Name)
+	// Build DSN (Data Source Name).
+	//
+	// The "timeout" parameter caps connection establishment (dial) at the
+	// driver level as a defensive backstop alongside the PingContext timeout
+	// below, so a misconfigured network cannot stall the deployment pipeline.
+	// We deliberately do not set readTimeout/writeTimeout here, as those would
+	// also abort legitimate long-running provisioning statements.
 	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/",
+		"%s:%s@tcp(%s:%s)/?timeout=%s",
 		config.AdminUser,
 		config.AdminPass,
 		config.DBHost,
 		config.DBPort,
+		pingTimeout,
 	)
 
 	db, err := sql.Open("mysql", dsn)
@@ -42,8 +50,11 @@ func (m *MariaDBProvisioner) Provision(config Config) error {
 	}
 	defer db.Close()
 
-	// Test the connection
-	if err := db.Ping(); err != nil {
+	// Test the connection with a strict timeout so a misconfigured network
+	// or a silently dropped connection cannot hang the deployment pipeline.
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("failed to ping MariaDB server: %w", err)
 	}
 	log.Println("[MariaDB] Connected successfully")
