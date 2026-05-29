@@ -811,7 +811,39 @@ Rely on Docker's internal DNS (`DB_HOST=postgres`) instead of exposing ports. Th
 
 ## Publishing to GitHub Container Registry
 
-To publish Docker-DBM to GitHub Container Registry (GHCR):
+### Automated Publishing (GitHub Actions)
+
+Docker-DBM ships with a GitHub Actions workflow that builds the image and
+publishes it to GHCR automatically. See
+[`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml).
+
+The workflow runs when:
+
+- A semantic-version tag (e.g. `v1.0.0`) is pushed.
+- A GitHub Release is published.
+- It is triggered manually from the **Actions** tab (`workflow_dispatch`).
+
+It uses [`docker/build-push-action`](https://github.com/docker/build-push-action)
+together with [`docker/metadata-action`](https://github.com/docker/metadata-action)
+to push the following tags to `ghcr.io/kmteam-llc/docker-dbm`:
+
+| Trigger        | Tags produced                                  |
+| -------------- | ---------------------------------------------- |
+| Tag `v1.2.3`   | `v1.2.3`, `1.2.3`, `1.2`, `1`, `latest`        |
+| Pre-release    | `v1.2.3-rc.1`, `1.2.3-rc.1` (no `latest`)      |
+| Manual dispatch| `latest`                                       |
+
+Authentication uses the built-in `GITHUB_TOKEN`, so **no extra secrets are
+required**. To cut a release, push a tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### Manual Publishing
+
+To publish Docker-DBM to GitHub Container Registry (GHCR) manually:
 
 ```bash
 # 1. Login to GHCR

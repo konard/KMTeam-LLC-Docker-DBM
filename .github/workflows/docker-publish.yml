@@ -1,0 +1,83 @@
+# =============================================================================
+# Docker-DBM - Publish to GitHub Container Registry (GHCR)
+# Powered by KMTeam LLC
+# =============================================================================
+#
+# This workflow builds the Docker-DBM image and publishes it to the GitHub
+# Container Registry (ghcr.io) whenever a new version tag or release is
+# pushed. Manual runs are also supported via the "Run workflow" button.
+#
+# IMAGE: ghcr.io/kmteam-llc/docker-dbm
+#
+# TAGS produced (for a release tag like v1.2.3):
+#   - ghcr.io/kmteam-llc/docker-dbm:v1.2.3   (full semver)
+#   - ghcr.io/kmteam-llc/docker-dbm:1.2.3    (semver without leading "v")
+#   - ghcr.io/kmteam-llc/docker-dbm:1.2      (major.minor)
+#   - ghcr.io/kmteam-llc/docker-dbm:1        (major)
+#   - ghcr.io/kmteam-llc/docker-dbm:latest   (only for non-prerelease tags)
+#
+# =============================================================================
+
+name: Publish Docker image to GHCR
+
+on:
+  # Build and push when a semantic-version tag is pushed (e.g. v1.0.0)
+  push:
+    tags:
+      - "v*.*.*"
+  # Build and push when a GitHub Release is published
+  release:
+    types: [published]
+  # Allow manual runs from the Actions tab
+  workflow_dispatch:
+
+# The image name is the registry path. ghcr.io requires a lowercase path,
+# so we hardcode the lowercased owner/repo here.
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: kmteam-llc/docker-dbm
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    # Permissions required to push to GHCR using the built-in GITHUB_TOKEN
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags and labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ (github.ref_type == 'tag' && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker-dbm
+          file: ./docker-dbm/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
