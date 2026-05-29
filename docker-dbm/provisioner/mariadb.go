@@ -48,6 +48,15 @@ func (m *MariaDBProvisioner) Provision(config Config) error {
 	}
 	log.Println("[MariaDB] Connected successfully")
 
+	return m.provision(db, config)
+}
+
+// provision performs the actual database and user provisioning against an
+// already-established connection. It is separated from Provision so the
+// provisioning logic can be exercised with a mocked database in tests.
+func (m *MariaDBProvisioner) provision(db *sql.DB, config Config) error {
+	var err error
+
 	// Validate identifiers to prevent SQL injection
 	if !isValidMariaDBIdentifier(config.AppDBName) {
 		return fmt.Errorf("invalid database name: %s (must contain only alphanumeric characters and underscores)", config.AppDBName)
@@ -134,12 +143,12 @@ func (m *MariaDBProvisioner) Provision(config Config) error {
 	}
 	log.Printf("[MariaDB] Granted ALL PRIVILEGES on '%s.*' to '%s'", config.AppDBName, config.AppDBUser)
 
-	// Flush privileges to ensure changes take effect
-	_, err = db.Exec("FLUSH PRIVILEGES")
-	if err != nil {
-		log.Printf("[MariaDB] WARNING: Failed to flush privileges: %v", err)
-		// Continue anyway as the grants should still work
-	}
+	// NOTE: No FLUSH PRIVILEGES is needed here. In MariaDB/MySQL, that statement is
+	// only required when the grant tables are modified directly via INSERT/UPDATE/DELETE.
+	// Account management statements (CREATE USER, GRANT) automatically reload the
+	// in-memory grant tables, so privileges take effect immediately. Skipping the
+	// statement also avoids a needless round-trip and a failure when the admin user
+	// lacks the global RELOAD privilege.
 
 	log.Println("[MariaDB] Provisioning completed successfully!")
 	log.Printf("[MariaDB] Database: %s | User: %s | Host: %s:%s",
